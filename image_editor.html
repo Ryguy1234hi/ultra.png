@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple Image Editor</title>
+  <style>
+    :root{--bg:#f3f4f6;--panel:#fff;--accent:#0ea5e9}
+    html,body{height:100%;margin:0;font-family:Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial}
+    body{background:var(--bg);display:flex;align-items:flex-start;justify-content:center;padding:28px}
+    .app{width:1100px;background:var(--panel);box-shadow:0 10px 30px rgba(2,6,23,0.08);border-radius:12px;overflow:hidden}
+    .toolbar{display:flex;gap:12px;padding:16px;border-bottom:1px solid #eee;align-items:center}
+    .tools{display:flex;gap:8px}
+    button, input[type=range], select{font:inherit}
+    button{background:#fff;border:1px solid #ddd;padding:8px 10px;border-radius:8px;cursor:pointer}
+    button.active{background:var(--accent);color:#fff;border-color:transparent}
+    .panel{display:flex;padding:18px}
+    .left{width:260px;padding-right:12px;border-right:1px solid #f0f0f0}
+    .left h3{margin:0 0 8px 0;font-size:14px}
+    .control{margin-bottom:12px}
+    .canvas-area{flex:1;padding-left:16px}
+    .canvas-wrap{background:#fafafa;border-radius:8px;padding:12px;border:1px solid #eee}
+    canvas{display:block;border-radius:6px;width:100%;height:auto;background:#fff;touch-action:none}
+    .text-overlay{position:fixed;left:0;top:0;display:flex;gap:8px;padding:8px;background:#fff;border:1px solid #ddd;border-radius:8px}
+    input[type=file]{display:block}
+    .small{font-size:12px;color:#666}
+    .row{display:flex;gap:8px}
+    .footer{padding:12px 18px;border-top:1px solid #eee;text-align:right;font-size:13px;color:#555}
+    @media (max-width:1200px){.app{width:100%;margin:8px}}
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="Simple Image Editor">
+    <div class="toolbar">
+      <div class="tools" role="toolbar" aria-label="tools">
+        <button id="brushBtn" class="active" data-tool="brush">Brush</button>
+        <button id="eraserBtn" data-tool="eraser">Eraser</button>
+        <button id="rectBtn" data-tool="rect">Rectangle</button>
+        <button id="textBtn" data-tool="text">Text</button>
+      </div>
+
+      <div style="margin-left:8px;display:flex;gap:8px;align-items:center">
+        <label class="small">Color <input type="color" id="color" value="#ff3b30"></label>
+        <label class="small">Size <input id="size" type="range" min="1" max="80" value="6"></label>
+        <label class="small">Linecap
+          <select id="lineCap"><option value="round">round</option><option value="butt">butt</option><option value="square">square</option></select>
+        </label>
+      </div>
+
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <input type="file" id="fileInput" accept="image/*" aria-label="Upload image">
+        <button id="undoBtn">Undo</button>
+        <button id="redoBtn">Redo</button>
+        <button id="clearBtn">Clear</button>
+        <button id="saveBtn">Save PNG</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="left">
+        <h3>Canvas Size</h3>
+        <div class="control row">
+          <input id="cw" type="number" value="1000" style="width:120px;padding:8px;border:1px solid #ddd;border-radius:6px"> 
+          <input id="ch" type="number" value="600" style="width:120px;padding:8px;border:1px solid #ddd;border-radius:6px">
+        </div>
+        <div class="control">
+          <button id="resizeBtn">Apply Size</button>
+        </div>
+
+        <h3>Text</h3>
+        <div class="control">
+          <input id="textInput" placeholder="Type text here" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+        </div>
+        <div class="control small">Tip: click the canvas where you want the text then press Add Text.</div>
+        <div class="control">
+          <button id="addTextBtn">Add Text</button>
+        </div>
+      </div>
+
+      <div class="canvas-area">
+        <div class="canvas-wrap">
+          <canvas id="canvas" width="1000" height="600" role="img" aria-label="drawing canvas"></canvas>
+        </div>
+        <div class="footer">
+          Active tool: <span id="activeTool">brush</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Basic single-file image editor in vanilla JS
+    (function(){
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      const brushBtn = document.getElementById('brushBtn');
+      const eraserBtn = document.getElementById('eraserBtn');
+      const rectBtn = document.getElementById('rectBtn');
+      const textBtn = document.getElementById('textBtn');
+      const colorEl = document.getElementById('color');
+      const sizeEl = document.getElementById('size');
+      const lineCapEl = document.getElementById('lineCap');
+      const undoBtn = document.getElementById('undoBtn');
+      const redoBtn = document.getElementById('redoBtn');
+      const clearBtn = document.getElementById('clearBtn');
+      const saveBtn = document.getElementById('saveBtn');
+      const fileInput = document.getElementById('fileInput');
+      const activeToolEl = document.getElementById('activeTool');
+      const cw = document.getElementById('cw');
+      const ch = document.getElementById('ch');
+      const resizeBtn = document.getElementById('resizeBtn');
+      const textInput = document.getElementById('textInput');
+      const addTextBtn = document.getElementById('addTextBtn');
+
+      let tool = 'brush';
+      let isDrawing = false;
+      let last = {x:0,y:0};
+      let rectStart = null;
+      let history = [];
+      let historyIndex = -1;
+      const HISTORY_LIMIT = 40;
+
+      function setTool(t){
+        tool = t; activeToolEl.textContent = t;
+        [brushBtn,eraserBtn,rectBtn,textBtn].forEach(b=>b.classList.remove('active'));
+        if(t==='brush') brushBtn.classList.add('active');
+        if(t==='eraser') eraserBtn.classList.add('active');
+        if(t==='rect') rectBtn.classList.add('active');
+        if(t==='text') textBtn.classList.add('active');
+      }
+
+      // initialize
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      pushHistory();
+
+      brushBtn.addEventListener('click', ()=>setTool('brush'));
+      eraserBtn.addEventListener('click', ()=>setTool('eraser'));
+      rectBtn.addEventListener('click', ()=>setTool('rect'));
+      textBtn.addEventListener('click', ()=>setTool('text'));
+
+      canvas.addEventListener('pointerdown', (e)=>{
+        e.preventDefault();
+        const pos = toCanvasPos(e);
+        last = pos;
+        if(tool==='rect'){
+          rectStart = pos; isDrawing = true; // we'll show live preview by restoring snapshot on move
+          pushHistory(); // snapshot before drawing rect
+          return;
+        }
+        if(tool==='text'){
+          // place text immediately at click
+          placeTextAt(pos);
+          return;
+        }
+        isDrawing = true; ctx.beginPath(); ctx.moveTo(pos.x,pos.y);
+      });
+
+      canvas.addEventListener('pointermove', (e)=>{
+        if(!isDrawing) return;
+        const pos = toCanvasPos(e);
+        if(tool==='brush' || tool==='eraser'){
+          ctx.strokeStyle = (tool==='eraser')? '#ffffff' : colorEl.value;
+          ctx.lineWidth = Number(sizeEl.value);
+          ctx.globalCompositeOperation = (tool==='eraser') ? 'destination-out' : 'source-over';
+          ctx.lineTo(pos.x,pos.y); ctx.stroke();
+        } else if(tool==='rect' && rectStart){
+          // live preview: restore last snapshot then draw rect
+          restoreHistorySnapshot(historyIndex);
+          ctx.beginPath(); ctx.globalCompositeOperation='source-over';
+          ctx.strokeStyle = colorEl.value; ctx.lineWidth = Number(sizeEl.value);
+          ctx.strokeRect(rectStart.x, rectStart.y, pos.x-rectStart.x, pos.y-rectStart.y);
+        }
+        last = pos;
+      });
+
+      canvas.addEventListener('pointerup', (e)=>{
+        if(!isDrawing) return;
+        const pos = toCanvasPos(e);
+        if(tool==='brush' || tool==='eraser'){
+          ctx.closePath(); pushHistory();
+        } else if(tool==='rect' && rectStart){
+          ctx.beginPath(); ctx.globalCompositeOperation='source-over';
+          ctx.strokeStyle = colorEl.value; ctx.lineWidth = Number(sizeEl.value);
+          ctx.strokeRect(rectStart.x, rectStart.y, pos.x-rectStart.x, pos.y-rectStart.y);
+          rectStart = null; pushHistory();
+        }
+        isDrawing = false;
+      });
+
+      canvas.addEventListener('pointerleave', ()=>{ if(isDrawing && (tool==='brush' || tool==='eraser')){ ctx.closePath(); pushHistory(); } isDrawing=false; rectStart=null; });
+
+      // Touch support: pointer events cover touch
+
+      function toCanvasPos(e){
+        const rect = canvas.getBoundingClientRect();
+        return { x: Math.round((e.clientX - rect.left) * (canvas.width / rect.width)), y: Math.round((e.clientY - rect.top) * (canvas.height / rect.height)) };
+      }
+
+      function pushHistory(){
+        // truncate
+        if(historyIndex < history.length -1) history = history.slice(0, historyIndex+1);
+        history.push(canvas.toDataURL());
+        if(history.length>HISTORY_LIMIT) history.shift();
+        historyIndex = history.length-1;
+        updateUndoRedo();
+      }
+
+      function restoreHistorySnapshot(index){
+        if(index<0 || index>=history.length) return;
+        const img = new Image(); img.onload = ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,0,0,canvas.width,canvas.height); };
+        img.src = history[index];
+      }
+
+      function undo(){ if(historyIndex<=0) return; historyIndex--; restoreHistorySnapshot(historyIndex); updateUndoRedo(); }
+      function redo(){ if(historyIndex>=history.length-1) return; historyIndex++; restoreHistorySnapshot(historyIndex); updateUndoRedo(); }
+      function updateUndoRedo(){ undoBtn.disabled = historyIndex<=0; redoBtn.disabled = historyIndex>=history.length-1; }
+
+      undoBtn.addEventListener('click', undo); redoBtn.addEventListener('click', redo);
+
+      clearBtn.addEventListener('click', ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height); pushHistory(); });
+
+      saveBtn.addEventListener('click', ()=>{
+        const a = document.createElement('a'); a.href = canvas.toDataURL('image/png'); a.download = 'image-editor-export.png'; a.click();
+      });
+
+      fileInput.addEventListener('change', (e)=>{
+        const f = e.target.files[0]; if(!f) return; const reader = new FileReader();
+        reader.onload = (ev)=>{ const img = new Image(); img.onload = ()=>{
+          // fit into canvas preserving aspect ratio
+          const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+          const w = img.width * scale; const h = img.height * scale;
+          ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+          ctx.drawImage(img, 0, 0, w, h);
+          pushHistory();
+        }; img.src = ev.target.result; };
+        reader.readAsDataURL(f);
+      });
+
+      // Resize canvas while preserving content
+      resizeBtn.addEventListener('click', ()=>{
+        const newW = Math.max(100, Number(cw.value)||800); const newH = Math.max(100, Number(ch.value)||600);
+        const old = canvas.toDataURL();
+        canvas.width = newW; canvas.height = newH; canvas.style.height = newH + 'px';
+        const img = new Image(); img.onload = ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,0,0,canvas.width,canvas.height); pushHistory(); };
+        img.src = old;
+      });
+
+      // Text
+      function placeTextAt(pos){
+        const text = textInput.value || 'Text';
+        ctx.save(); ctx.fillStyle = colorEl.value; ctx.font = Math.max(12, Number(sizeEl.value)*6) + 'px sans-serif'; ctx.fillText(text, pos.x, pos.y); ctx.restore(); pushHistory();
+      }
+
+      addTextBtn.addEventListener('click', ()=>{
+        // place text at center if not clicked
+        const pos = { x: Math.round(canvas.width/2), y: Math.round(canvas.height/2) };
+        placeTextAt(pos);
+      });
+
+      // keyboard shortcuts
+      window.addEventListener('keydown', (e)=>{
+        if((e.ctrlKey||e.metaKey) && e.key==='z') { e.preventDefault(); undo(); }
+        if((e.ctrlKey||e.metaKey) && e.key==='y') { e.preventDefault(); redo(); }
+      });
+
+      // keep lineCap in sync
+      lineCapEl.addEventListener('change', ()=>{ ctx.lineCap = lineCapEl.value; ctx.lineJoin = lineCapEl.value; });
+
+      // keep size in sync on beginning of stroke
+      sizeEl.addEventListener('input', ()=>{ /* visual only */});
+
+      // set default active
+      setTool('brush'); updateUndoRedo();
+
+    })();
+  </script>
+</body>
+</html>
